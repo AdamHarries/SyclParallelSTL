@@ -63,7 +63,6 @@ typename std::iterator_traits<InputIterator>::difference_type count_if(
   auto local =
       std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
                vectorSize);
-  typedef typename std::iterator_traits<InputIterator>::value_type type_;
   auto bufI = sycl::helpers::make_const_buffer(first, last);
   cl::sycl::buffer<int, 1> bufR((cl::sycl::range<1>(vectorSize)));
   size_t length = exec.calculateGlobalSize(vectorSize, local);

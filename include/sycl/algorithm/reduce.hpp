@@ -37,8 +37,8 @@
 // SYCL helpers header
 #include <sycl/helpers/sycl_buffers.hpp>
 #include <sycl/helpers/sycl_differences.hpp>
+#include <sycl/impl/sycl_reduce.hpp>
 #include <sycl/algorithm/algorithm_composite_patterns.hpp>
-
 namespace sycl {
 namespace impl {
 
@@ -51,48 +51,16 @@ namespace impl {
 template <class ExecutionPolicy, class Iterator, class T, class BinaryOperation>
 typename std::iterator_traits<Iterator>::value_type reduce(
     ExecutionPolicy &sep, Iterator b, Iterator e, T init, BinaryOperation bop) {
-  cl::sycl::queue q(sep.get_queue());
 
   auto vectorSize = sycl::helpers::distance(b, e);
 
   if (vectorSize < 1) {
     return init;
   }
-
-  auto device = q.get_device();
-  auto local =
-      std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
-               vectorSize);
-
-  typedef typename std::iterator_traits<Iterator>::value_type type_;
   auto bufI = sycl::helpers::make_const_buffer(b, e);
-  size_t length = vectorSize;
-  size_t global = sep.calculateGlobalSize(length, local);
 
-  do {
-    auto f = [length, local, global, &bufI, bop](cl::sycl::handler &h) mutable {
-      cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                              cl::sycl::range<3>{local, 1, 1}};
-      auto aI = bufI.template get_access<cl::sycl::access::mode::read_write>(h);
-      cl::sycl::accessor<type_, 1, cl::sycl::access::mode::read_write,
-                         cl::sycl::access::target::local>
-          scratch(cl::sycl::range<1>(local), h);
+  sycl::impl::sycl_reduce_impl(sep, bufI, bop);
 
-      h.parallel_for<typename ExecutionPolicy::kernelName>(
-          r, [aI, scratch, local, length, bop](cl::sycl::nd_item<3> id) {
-            int globalid = id.get_global(0);
-            int localid = id.get_local(0);
-
-            auto r = ReductionStrategy<T>(local, length, id, scratch);
-            r.workitem_get_from(aI);
-            r.combine_threads(bop);
-            r.workgroup_write_to(aI);
-          });
-    };
-    q.submit(f);
-    length = length / local;
-  } while (length > 1);
-  q.wait_and_throw();
   auto hI = bufI.template get_access<cl::sycl::access::mode::read,
                                      cl::sycl::access::target::host_buffer>();
   return hI[0] + init;

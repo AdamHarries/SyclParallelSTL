@@ -35,6 +35,7 @@
 
 // Detail header
 #include <sycl/helpers/sycl_buffers.hpp>
+#include <sycl/impl/sycl_transform.hpp>
 
 namespace sycl {
 namespace impl {
@@ -53,28 +54,10 @@ template <class ExecutionPolicy, class Iterator, class OutputIterator,
 OutputIterator transform(ExecutionPolicy &sep, Iterator b, Iterator e,
                          OutputIterator out, UnaryOperation op) {
   {
-    cl::sycl::queue q(sep.get_queue());
-    auto device = q.get_device();
-    size_t local =
-        device.get_info<cl::sycl::info::device::max_work_group_size>();
     auto bufI = sycl::helpers::make_const_buffer(b, e);
     auto bufO = sycl::helpers::make_buffer(out, out + bufI.get_count());
-    auto vectorSize = bufI.get_count();
-    size_t global = sep.calculateGlobalSize(vectorSize, local);
-    auto f = [vectorSize, local, global, &bufI, &bufO, op](
-        cl::sycl::handler &h) {
-      cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                              cl::sycl::range<3>{local, 1, 1}};
-      auto aI = bufI.template get_access<cl::sycl::access::mode::read>(h);
-      auto aO = bufO.template get_access<cl::sycl::access::mode::write>(h);
-      h.parallel_for<typename ExecutionPolicy::kernelName>(
-          r, [aI, aO, op, vectorSize](cl::sycl::nd_item<3> id) {
-            if ((id.get_global(0) < vectorSize)) {
-              aO[id.get_global(0)] = op(aI[id.get_global(0)]);
-            }
-          });
-    };
-    q.submit(f);
+
+    sycl_transform_impl(sep, bufI, bufO, op);
   }
   return out;
 }
@@ -94,30 +77,12 @@ template <class ExecutionPolicy, class InputIterator, class OutputIterator,
 OutputIterator transform(ExecutionPolicy &sep, InputIterator first1,
                          InputIterator last1, InputIterator first2,
                          OutputIterator result, BinaryOperation op) {
-  cl::sycl::queue q(sep.get_queue());
-  auto device = q.get_device();
-  size_t local = device.get_info<cl::sycl::info::device::max_work_group_size>();
   auto buf1 = sycl::helpers::make_const_buffer(first1, last1);
   auto n = buf1.get_count();
   auto buf2 = sycl::helpers::make_const_buffer(first2, first2 + n);
   auto res = sycl::helpers::make_buffer(result, result + n);
-  size_t global = sep.calculateGlobalSize(n, local);
-  auto f = [n, local, global, &buf1, &buf2, &res, op](
-      cl::sycl::handler &h) mutable {
-    cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                            cl::sycl::range<3>{local, 1, 1}};
-    auto a1 = buf1.template get_access<cl::sycl::access::mode::read>(h);
-    auto a2 = buf2.template get_access<cl::sycl::access::mode::read>(h);
-    auto aO = res.template get_access<cl::sycl::access::mode::write>(h);
-    h.parallel_for<typename ExecutionPolicy::kernelName>(
-        r, [a1, a2, aO, op, n](cl::sycl::nd_item<3> id) {
-          if (id.get_global(0) < n) {
-            aO[id.get_global(0)] =
-                op(a1[id.get_global(0)], a2[id.get_global(0)]);
-          }
-        });
-  };
-  q.submit(f);
+
+  sycl_binary_transform_impl(sep, buf1, buf2, res, op);
   return first2 + n;
 }
 
@@ -138,29 +103,12 @@ OutputIterator transform(ExecutionPolicy &sep, cl::sycl::queue &q,
                          InputIterator first1, InputIterator last1,
                          InputIterator first2, OutputIterator result,
                          BinaryOperation op) {
-  auto device = q.get_device();
-  size_t local = device.get_info<cl::sycl::info::device::max_work_group_size>();
   auto buf1 = sycl::helpers::make_const_buffer(first1, last1);
   auto n = buf1.get_count();
   auto buf2 = sycl::helpers::make_const_buffer(first2, first2 + n);
   auto res = sycl::helpers::make_buffer(result, result + n);
-  size_t global = sep.calculateGlobalSize(n, local);
-  auto f = [n, local, global, &buf1, &buf2, &res, op](
-      cl::sycl::handler &h) mutable {
-    cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                            cl::sycl::range<3>{local, 1, 1}};
-    auto a1 = buf1.template get_access<cl::sycl::access::mode::read>(h);
-    auto a2 = buf2.template get_access<cl::sycl::access::mode::read>(h);
-    auto aO = res.template get_access<cl::sycl::access::mode::write>(h);
-    h.parallel_for<typename ExecutionPolicy::kernelName>(
-        r, [a1, a2, aO, op, n](cl::sycl::nd_item<3> id) {
-          if (id.get_global(0) < n) {
-            aO[id.get_global(0)] =
-                op(a1[id.get_global(0)], a2[id.get_global(0)]);
-          }
-        });
-  };
-  q.submit(f);
+
+  sycl_binary_transform_impl(sep, buf1, buf2, res, op);
   return first2 + n;
 }
 
@@ -177,26 +125,7 @@ OutputIterator transform(ExecutionPolicy &sep, cl::sycl::queue &q,
 template <class ExecutionPolicy, class Buffer, class BinaryOperation>
 void transform(ExecutionPolicy &sep, cl::sycl::queue &q, Buffer &buf1,
                Buffer &buf2, Buffer &res, BinaryOperation op) {
-  auto device = q.get_device();
-  size_t local = device.get_info<cl::sycl::info::device::max_work_group_size>();
-  auto n = buf1.get_count();
-  size_t global = sep.calculateGlobalSize(n, local);
-  auto f = [n, local, global, &buf1, &buf2, &res, op](
-      cl::sycl::handler &h) mutable {
-    cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                            cl::sycl::range<3>{local, 1, 1}};
-    auto a1 = buf1.template get_access<cl::sycl::access::mode::read>(h);
-    auto a2 = buf2.template get_access<cl::sycl::access::mode::read>(h);
-    auto aO = res.template get_access<cl::sycl::access::mode::write>(h);
-    h.parallel_for<class TransformAlgorithm>(
-        r, [a1, a2, aO, op, n](cl::sycl::nd_item<3> id) {
-          if (id.get_global(0) < n) {
-            aO[id.get_global(0)] =
-                op(a1[id.get_global(0)], a2[id.get_global(0)]);
-          }
-        });
-  };
-  q.submit(f);
+  sycl_binary_transform_impl(sep, buf1, buf2, res, op);
 }
 
 }  // namespace impl

@@ -37,6 +37,8 @@
 #include <sycl/helpers/sycl_buffers.hpp>
 #include <sycl/helpers/sycl_differences.hpp>
 #include <sycl/algorithm/algorithm_composite_patterns.hpp>
+#include <sycl/impl/sycl_reduce.hpp>
+#include <sycl/impl/sycl_transform.hpp>
 
 namespace sycl {
 namespace impl {
@@ -52,56 +54,29 @@ template <class ExecutionPolicy, class InputIterator, class UnaryOperation,
 T transform_reduce(ExecutionPolicy& exec, InputIterator first,
                    InputIterator last, UnaryOperation unary_op, T init,
                    BinaryOperation binary_op) {
-  cl::sycl::queue q(exec.get_queue());
+
   auto vectorSize = sycl::helpers::distance(first, last);
+
+
+  // build buffer to hold initial data
+  auto bufI = sycl::helpers::make_const_buffer(first, last);
+
+  // build buffer to hold result of transform
   cl::sycl::buffer<T, 1> bufR((cl::sycl::range<1>(vectorSize)));
   if (vectorSize < 1) {
     return init;
   }
 
-  auto device = q.get_device();
-  auto local =
-      std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
-               vectorSize);
-  typedef typename std::iterator_traits<InputIterator>::value_type type_;
-  auto bufI = sycl::helpers::make_const_buffer(first, last);
-  size_t length = vectorSize;
-  size_t global = exec.calculateGlobalSize(vectorSize, local);
-  int passes = 0;
+  // transform from bufI -> bufR using unary op 
+  sycl_transform_impl(exec, bufI, bufR, unary_op);
 
-  do {
-    auto f = [passes, length, local, global, &bufI, &bufR, unary_op, binary_op](
-        cl::sycl::handler& h) mutable {
-      cl::sycl::nd_range<3> r{cl::sycl::range<3>{std::max(global, local), 1, 1},
-                              cl::sycl::range<3>{local, 1, 1}};
-      auto aI = bufI.template get_access<cl::sycl::access::mode::read>(h);
-      auto aR = bufR.template get_access<cl::sycl::access::mode::read_write>(h);
-      cl::sycl::accessor<T, 1, cl::sycl::access::mode::read_write,
-                         cl::sycl::access::target::local>
-          scratch(cl::sycl::range<1>(local), h);
+  // reduce bufR using binary_op
+  sycl_reduce_impl(exec, bufR, binary_op);
 
-      h.parallel_for<typename ExecutionPolicy::kernelName>(
-          r, [aI, aR, scratch, passes, local, length, unary_op, binary_op](
-                 cl::sycl::nd_item<3> id) {
-            int globalid = id.get_global(0);
-            int localid = id.get_local(0);
-            auto r = ReductionStrategy<T>(local, length, id, scratch);
-            if (passes == 0) {
-              r.workitem_get_from(unary_op, aI);
-            } else {
-              r.workitem_get_from(aR);
-            }
-            r.combine_threads(binary_op);
-            r.workgroup_write_to(aR);
-          });
-    };
-    q.submit(f);
-    passes++;
-    length = length / local;
-  } while (length > 1);
-  q.wait_and_throw();
+  // get accessor to the buffer
   auto hR = bufR.template get_access<cl::sycl::access::mode::read,
                                      cl::sycl::access::target::host_buffer>();
+
   return binary_op(hR[0], init);
 }
 

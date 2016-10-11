@@ -6,6 +6,7 @@ PACKAGE_ROOT=$2
 
 function install_gmock  {
   mkdir -p external && pushd external
+  git clone git@github.com:google/googletest.git
   pushd googletest/googlemock/make && make
   popd 
   popd
@@ -29,7 +30,7 @@ function tst {
 }
 
 function main {
-  install_gmock
+  #install_gmock
   configure
   mak
   tst

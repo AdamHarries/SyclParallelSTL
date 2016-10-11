@@ -38,6 +38,8 @@
 #include <sycl/helpers/sycl_buffers.hpp>
 #include <sycl/helpers/sycl_namegen.hpp>
 #include <sycl/algorithm/algorithm_composite_patterns.hpp>
+#include <sycl/impl/sycl_reduce.hpp>
+#include <sycl/impl/sycl_transform.hpp>
 
 namespace sycl {
 namespace impl {
@@ -56,9 +58,9 @@ typedef struct search_result {
 template <class ExecutionPolicy, class InputIt, class UnaryPredicate>
 InputIt find_impl(ExecutionPolicy &sep, InputIt b, InputIt e,
                   UnaryPredicate p) {
-  cl::sycl::queue q(sep.get_queue());
-
-  auto device = q.get_device();
+  // cl::sycl::queue q(sep.get_queue());
+  typedef typename std::iterator_traits<InputIt>::value_type type_;
+  // auto device = q.get_device();
 
   // make a buffer that doesn't trigger a copy back, as we don't modify it
   auto buf = sycl::helpers::make_const_buffer(b, e);
@@ -72,36 +74,15 @@ InputIt find_impl(ExecutionPolicy &sep, InputIt b, InputIt e,
     return e;
   }
 
-  size_t localRange =
-      std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
-               vectorSize);
-  size_t globalRange = sep.calculateGlobalSize(vectorSize, localRange);
+  auto b_op = [p](type_ v, int ix){ return search_result(p(v), ix); };
 
   // map across the input testing whether they match the predicate
   // store the result of the predicate and the index in the array of the result
-  auto eqf = [vectorSize, localRange, globalRange, &buf, &t_buf, p](
-      cl::sycl::handler &h) {
-    cl::sycl::nd_range<3> r{
-        cl::sycl::range<3>{std::max(globalRange, localRange), 1, 1},
-        cl::sycl::range<3>{localRange, 1, 1}};
-    auto aI = buf.template get_access<cl::sycl::access::mode::read>(h);
-    auto aO = t_buf.template get_access<cl::sycl::access::mode::write>(h);
-    h.parallel_for<
-        cl::sycl::helpers::NameGen<0, typename ExecutionPolicy::kernelName> >(
-        r, [aI, aO, vectorSize, p](cl::sycl::nd_item<3> id) {
-          int m_id = id.get_global(0);
-          // build a pair of equality and index, so that we can find the
-          // _first_ index which is true, as opposed to just "one" of them
-          aO[m_id] = search_result(p(aI[m_id]), m_id);
-        });
-  };
-  q.submit(eqf);
+  sycl::impl::sycl_zip_transform_impl(sep, buf, t_buf, b_op);
 
   // Perform a reduction across the pairs of (predicate result, index), to find
   // the pair with the lowest index where predicate result is true
-  // manually implemented, as we can't call currently use sycl buffers with
-  // the parallel stl algorithms directly
-
+  
   // Build a lambda for the reduction, comparing pairs of (result, index) pairs
   // we wish to return the minimum of the two indices where the predicate
   // is "true", or the maximum of the indicies if it is true at neither.
@@ -117,39 +98,7 @@ InputIt find_impl(ExecutionPolicy &sep, InputIt b, InputIt e,
     }
   };
 
-  // more or less copied from the reduction implementation
-  // TODO: refactor out the implementation details from both into a separate
-  // module
-  size_t length = vectorSize;
-  do {
-    auto rf = [length, localRange, globalRange, &t_buf, bop](
-        cl::sycl::handler &h) {
-      cl::sycl::nd_range<3> r{
-          cl::sycl::range<3>{std::max(globalRange, localRange), 1, 1},
-          cl::sycl::range<3>{localRange, 1, 1}};
-      auto aI =
-          t_buf.template get_access<cl::sycl::access::mode::read_write>(h);
-      cl::sycl::accessor<search_result, 1, cl::sycl::access::mode::read_write,
-                         cl::sycl::access::target::local>
-          scratch(cl::sycl::range<1>(localRange), h);
-
-      h.parallel_for<
-          cl::sycl::helpers::NameGen<1, typename ExecutionPolicy::kernelName> >(
-          r, [aI, scratch, localRange, length, bop](cl::sycl::nd_item<3> id) {
-            int globalid = id.get_global(0);
-            int localid = id.get_local(0);
-
-            auto r = ReductionStrategy<search_result>(localRange, length, id,
-                                                      scratch);
-            r.workitem_get_from(aI);
-            r.combine_threads(bop);
-            r.workgroup_write_to(aI);
-          });
-    };
-    q.submit(rf);
-    length = length / localRange;
-  } while (length > 1);
-  q.wait_and_throw();
+  sycl_reduce_impl(sep, t_buf, bop);
 
   auto hI = t_buf.template get_access<cl::sycl::access::mode::read,
                                       cl::sycl::access::target::host_buffer>();
