@@ -26,26 +26,22 @@
 
 */
 
-#ifndef __SYCL_IMPL_ALGORITHM_FOR_EACH__
-#define __SYCL_IMPL_ALGORITHM_FOR_EACH__
-
-#include <type_traits>
 #include <algorithm>
+#include <vector>
+#include <string>
 #include <iostream>
+#include <cmath>
 
-// SYCL helpers header
-#include <sycl/helpers/sycl_buffers.hpp>
-#include <sycl/impl/granular_parallel_for.hpp>
+#include <experimental/algorithm>
+#include <sycl/execution_policy>
 
-namespace sycl {
-namespace impl {
+#include "benchmark.h"
+#include "complex_kernel.h"
+  
+using namespace sycl::helpers;
 
-/* for_each.
- * Implementation of the command group that submits a for_each kernel.
- * The kernel is implemented as a lambda.
- */
 template <class ExecutionPolicy, class Iterator, class UnaryFunction>
-void for_each(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
+void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
   {
     cl::sycl::queue q(sep.get_queue());
     auto device = q.get_device();
@@ -61,6 +57,7 @@ void for_each(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
           cl::sycl::range<3>{std::max(globalRange, localRange), 1, 1},
           cl::sycl::range<3>{localRange, 1, 1}};
       auto aI = bufI.template get_access<cl::sycl::access::mode::read_write>(h);
+      // absolutely default parallel for
       h.parallel_for<typename ExecutionPolicy::kernelName>(
           r, [aI, op, vectorSize](cl::sycl::nd_item<3> id) {
             if (id.get_global(0) < vectorSize) {
@@ -72,7 +69,20 @@ void for_each(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
   }
 }
 
-}  // namespace impl
-}  // namespace sycl
+benchmark<>::time_units_t benchmark_foreach_default(const unsigned numReps,
+                                            const unsigned num_elems) {
+  auto v1 = build_vector(num_elems);
 
-#endif  // __SYCL_IMPL_ALGORITHM_FOR_EACH__
+  cl::sycl::queue q;
+  auto myforeach = [&]() {  
+    sycl::sycl_execution_policy<class ForEachAlgorithm1> snp(q);
+    for_each_impl(
+        snp, begin(v1), end(v1), kernel);
+  };
+
+  auto time = benchmark<>::duration(numReps, myforeach);
+
+  return time;
+}
+
+BENCHMARK_MAIN("BENCH_SYCL_FOREACH_DEFAULT", benchmark_foreach_default, 2u, 33554432u, 10);

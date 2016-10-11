@@ -26,53 +26,70 @@
 
 */
 
-#ifndef __SYCL_IMPL_ALGORITHM_FOR_EACH__
-#define __SYCL_IMPL_ALGORITHM_FOR_EACH__
-
-#include <type_traits>
 #include <algorithm>
+#include <vector>
+#include <string>
 #include <iostream>
+#include <cmath>
 
-// SYCL helpers header
-#include <sycl/helpers/sycl_buffers.hpp>
-#include <sycl/impl/granular_parallel_for.hpp>
+#include <experimental/algorithm>
+#include <sycl/execution_policy>
 
-namespace sycl {
-namespace impl {
+#include "benchmark.h"
+#include "complex_kernel.h"
 
-/* for_each.
- * Implementation of the command group that submits a for_each kernel.
- * The kernel is implemented as a lambda.
- */
+using namespace sycl::helpers;
+
 template <class ExecutionPolicy, class Iterator, class UnaryFunction>
-void for_each(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
+void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
   {
     cl::sycl::queue q(sep.get_queue());
     auto device = q.get_device();
-    size_t localRange =
-        device.get_info<cl::sycl::info::device::max_work_group_size>();
+    
     typedef typename std::iterator_traits<Iterator>::value_type type_;
     auto bufI = sycl::helpers::make_buffer(b, e);
     auto vectorSize = bufI.get_count();
-    size_t globalRange = sep.calculateGlobalSize(vectorSize, localRange);
+    auto chunkSize = 16; // random chunk size, might be good
+    // naive way of getting a local range.
+    size_t localRange =
+      std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
+        vectorSize);
+    // global range based on chunking up inputs
+    size_t globalRange = sep.calculateGlobalSize(
+      (vectorSize + (chunkSize-1)) / chunkSize, // rounding up division by chunk size
+      localRange);
     auto f = [vectorSize, localRange, globalRange, &bufI, op, &sep](
         cl::sycl::handler &h) mutable {
       cl::sycl::nd_range<3> r{
           cl::sycl::range<3>{std::max(globalRange, localRange), 1, 1},
           cl::sycl::range<3>{localRange, 1, 1}};
       auto aI = bufI.template get_access<cl::sycl::access::mode::read_write>(h);
-      h.parallel_for<typename ExecutionPolicy::kernelName>(
-          r, [aI, op, vectorSize](cl::sycl::nd_item<3> id) {
-            if (id.get_global(0) < vectorSize) {
-              op(aI[id.get_global(0)]);
-            }
-          });
+      // chunking parallel for using sizes given by implementation
+      cl::sycl::helpers::parallel_for<typename ExecutionPolicy::kernelName>(h,r,vectorSize, 
+        [aI, op, vectorSize](size_t id) {
+          op(aI[id]);
+        });
+
     };
     q.submit(f);
   }
 }
 
-}  // namespace impl
-}  // namespace sycl
 
-#endif  // __SYCL_IMPL_ALGORITHM_FOR_EACH__
+benchmark<>::time_units_t benchmark_foreach_static_coarse(const unsigned numReps,
+                                            const unsigned num_elems) {
+  auto v1 = build_vector(num_elems);
+  
+  cl::sycl::queue q;
+  auto myforeach = [&]() {  
+    sycl::sycl_execution_policy<class ForEachAlgorithm1> snp(q);
+    for_each_impl(
+        snp, begin(v1), end(v1), kernel);
+  };
+
+  auto time = benchmark<>::duration(numReps, myforeach);
+
+  return time;
+}
+
+BENCHMARK_MAIN("BENCH_SYCL_FOREACH_STATIC_COARSE", benchmark_foreach_static_coarse, 2u, 33554432u, 10);

@@ -96,6 +96,36 @@ class sycl_execution_policy {
     return newGlobal;
   }
 
+  /* Calculate granular dimensions, given an input size. 
+  * @brief Suggests global and local thread dimensions, given an input size, 
+  *        under the assumption that it will be run with a coarser grained 
+  *        parallel for
+  * @param lRange : The logical range of the granular iterations, i.e. 
+  *                 the input size
+  */ 
+  cl::sycl::nd_range<3> calculateGranularDimensions(size_t lRange){
+    // do some very naive stuff to get a global/local size
+    // try with workgroup sizes of 64 - should be good for AMD, and potentially 
+    // NVIDIA as well, and /not bad/ for Intel
+    size_t local = std::min((size_t)64, lRange);
+    // size_t localRange = std::min(device.get_info<cl::sycl::info::device::max_work_group_size>(),
+    //            lRange);
+    // Based on that, assume we want about 8 workgroups per compute unit, 
+    // the advice given here:
+    // http://stackoverflow.com/questions/9326430/number-of-compute-units-corresponding-to-the-number-of-work-groups
+    // suggests at least 192 _threads_, but we'll blow past that (i.e. 64*8)
+    auto device = get_queue().get_device();
+    size_t compute_units = device.template get_info<cl::sycl::info::device::max_compute_units>();
+    size_t global = std::min(local * compute_units * 8, lRange);
+    // now check that it's a valid global range
+    global = calculateGlobalSize(global, local);
+    // and return that:
+    return cl::sycl::nd_range<3>{
+      cl::sycl::range<3>{global, 1, 1}, 
+      cl::sycl::range<3>{local, 1, 1}
+    };
+  }
+
   /** reduce
    * @brief Function that sorts the given range
    * @param exec  : Execution Policy
