@@ -30,7 +30,7 @@ function tst {
 }
 
 function main {
-  #install_gmock
+  install_gmock
   configure
   mak
   tst
