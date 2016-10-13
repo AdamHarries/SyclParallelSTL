@@ -32,7 +32,6 @@
 #include <algorithm>
 #include <iostream>
 #include <sycl/helpers/sycl_namegen.hpp>
-#include <sycl/impl/pstl_queue.hpp>
 
 namespace sycl {
 namespace impl {
