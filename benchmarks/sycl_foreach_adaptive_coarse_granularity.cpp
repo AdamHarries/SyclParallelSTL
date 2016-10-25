@@ -41,35 +41,33 @@
 using namespace sycl::helpers;
 
 template <class ExecutionPolicy, class Iterator, class UnaryFunction>
-void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
+void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e,
+                   UnaryFunction op) {
   {
     cl::sycl::queue q(sep.get_queue());
     auto device = q.get_device();
     typedef typename std::iterator_traits<Iterator>::value_type type_;
     auto bufI = sycl::helpers::make_buffer(b, e);
     auto vectorSize = bufI.get_count();
-    auto f = [vectorSize, &bufI, op, &sep](
-        cl::sycl::handler &h) mutable {
+    auto f = [vectorSize, &bufI, op, &sep](cl::sycl::handler &h) mutable {
       auto aI = bufI.template get_access<cl::sycl::access::mode::read_write>(h);
       // chunking parallel for using suggested sizes from execution policy
       cl::sycl::helpers::parallel_for<typename ExecutionPolicy::kernelName>(
-        h,sep,vectorSize, [aI, op, vectorSize](size_t id) {
-          op(aI[id]);
-        });
+          h, sep, vectorSize, [aI, op, vectorSize](size_t id) { op(aI[id]); });
     };
     q.submit(f);
   }
 }
 
-benchmark<>::time_units_t benchmark_foreach_adaptive_coarse(const unsigned numReps,
-                                            const unsigned num_elems) {
+benchmark<>::time_units_t benchmark_foreach_adaptive_coarse(
+    const unsigned numReps, const unsigned num_elems,
+    const cli_device_selector cds) {
   auto v1 = build_vector(num_elems);
 
-  cl::sycl::queue q;
-  auto myforeach = [&]() {  
+  cl::sycl::queue q(cds);
+  auto myforeach = [&]() {
     sycl::sycl_execution_policy<class ForEachAlgorithm1> snp(q);
-    for_each_impl(
-        snp, begin(v1), end(v1), kernel);
+    for_each_impl(snp, begin(v1), end(v1), kernel);
   };
 
   auto time = benchmark<>::duration(numReps, myforeach);
@@ -77,4 +75,5 @@ benchmark<>::time_units_t benchmark_foreach_adaptive_coarse(const unsigned numRe
   return time;
 }
 
-BENCHMARK_MAIN("BENCH_SYCL_FOREACH_ADAPTIVE_COARSE", benchmark_foreach_adaptive_coarse, 2u, 33554432u, 10);
+BENCHMARK_MAIN("BENCH_SYCL_FOREACH_ADAPTIVE_COARSE",
+               benchmark_foreach_adaptive_coarse, 2u, 33554432u, 10);

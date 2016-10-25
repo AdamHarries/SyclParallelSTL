@@ -37,11 +37,12 @@
 
 #include "benchmark.h"
 #include "complex_kernel.h"
-  
+
 using namespace sycl::helpers;
 
 template <class ExecutionPolicy, class Iterator, class UnaryFunction>
-void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
+void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e,
+                   UnaryFunction op) {
   {
     cl::sycl::queue q(sep.get_queue());
     auto device = q.get_device();
@@ -69,15 +70,15 @@ void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction o
   }
 }
 
-benchmark<>::time_units_t benchmark_foreach_default(const unsigned numReps,
-                                            const unsigned num_elems) {
+benchmark<>::time_units_t benchmark_foreach_default(
+    const unsigned numReps, const unsigned num_elems,
+    const cli_device_selector cds) {
   auto v1 = build_vector(num_elems);
 
-  cl::sycl::queue q;
-  auto myforeach = [&]() {  
+  cl::sycl::queue q(cds);
+  auto myforeach = [&]() {
     sycl::sycl_execution_policy<class ForEachAlgorithm1> snp(q);
-    for_each_impl(
-        snp, begin(v1), end(v1), kernel);
+    for_each_impl(snp, begin(v1), end(v1), kernel);
   };
 
   auto time = benchmark<>::duration(numReps, myforeach);
@@ -85,4 +86,5 @@ benchmark<>::time_units_t benchmark_foreach_default(const unsigned numReps,
   return time;
 }
 
-BENCHMARK_MAIN("BENCH_SYCL_FOREACH_DEFAULT", benchmark_foreach_default, 2u, 33554432u, 10);
+BENCHMARK_MAIN("BENCH_SYCL_FOREACH_DEFAULT", benchmark_foreach_default, 2u,
+               33554432u, 10);

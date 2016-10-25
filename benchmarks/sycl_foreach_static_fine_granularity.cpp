@@ -41,7 +41,8 @@
 using namespace sycl::helpers;
 
 template <class ExecutionPolicy, class Iterator, class UnaryFunction>
-void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction op) {
+void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e,
+                   UnaryFunction op) {
   {
     cl::sycl::queue q(sep.get_queue());
     auto device = q.get_device();
@@ -59,25 +60,23 @@ void for_each_impl(ExecutionPolicy &sep, Iterator b, Iterator e, UnaryFunction o
           cl::sycl::range<3>{localRange, 1, 1}};
       auto aI = bufI.template get_access<cl::sycl::access::mode::read_write>(h);
       // chunking parallel for using sizes given by implementation
-      cl::sycl::helpers::parallel_for<typename ExecutionPolicy::kernelName>(h,
-        r,vectorSize, [aI, op, vectorSize](size_t id) {
-          op(aI[id]);
-        });
+      cl::sycl::helpers::parallel_for<typename ExecutionPolicy::kernelName>(
+          h, r, vectorSize, [aI, op, vectorSize](size_t id) { op(aI[id]); });
 
     };
     q.submit(f);
   }
 }
 
-benchmark<>::time_units_t benchmark_foreach_static_fine(const unsigned numReps,
-                                            const unsigned num_elems) {
+benchmark<>::time_units_t benchmark_foreach_static_fine(
+    const unsigned numReps, const unsigned num_elems,
+    const cli_device_selector cds) {
   auto v1 = build_vector(num_elems);
 
-  cl::sycl::queue q;
-  auto myforeach = [&]() {  
+  cl::sycl::queue q(cds);
+  auto myforeach = [&]() {
     sycl::sycl_execution_policy<class ForEachAlgorithm1> snp(q);
-    for_each_impl(
-        snp, begin(v1), end(v1), kernel);
+    for_each_impl(snp, begin(v1), end(v1), kernel);
   };
 
   auto time = benchmark<>::duration(numReps, myforeach);
@@ -85,4 +84,5 @@ benchmark<>::time_units_t benchmark_foreach_static_fine(const unsigned numReps,
   return time;
 }
 
-BENCHMARK_MAIN("BENCH_SYCL_FOREACH_STATIC_FINE", benchmark_foreach_static_fine, 2u, 33554432u, 10);
+BENCHMARK_MAIN("BENCH_SYCL_FOREACH_STATIC_FINE", benchmark_foreach_static_fine,
+               2u, 33554432u, 10);
