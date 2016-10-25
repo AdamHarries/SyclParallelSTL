@@ -39,31 +39,41 @@
 
 using namespace sycl::helpers;
 
-benchmark<>::time_units_t benchmark_transform(const unsigned numReps,
-                                              const unsigned num_elems,
-                                              const cli_device_selector cds) {
-  std::vector<int> v1;
-  std::vector<int> v2;
-  std::vector<int> res;
+typedef struct elem {
+  float a;
+  float b;
+} elem;
 
-  for (int i = num_elems; i > 0; i--) {
-    v1.push_back(i);
-    v2.push_back(i);
-    res.push_back(i);
+#define PI 3.141
+
+benchmark<>::time_units_t benchmark_transform_reduce(
+    const unsigned numReps, const unsigned num_elems,
+    const cli_device_selector cds) {
+  std::vector<elem> v;
+  auto expected = 0.0f;
+
+  for (unsigned int i = num_elems; i > 0; i--) {
+    float a = 10.0f + static_cast<float>(10.0f * sin(i));
+    float b = 10.0f + static_cast<float>(10.0f * cos(i));
+    v.push_back({a, b});
+    expected += a * b * PI;
   }
-  cl::sycl::queue q(cds);
-  sycl::sycl_execution_policy<class TransformAlgorithm1> snp(q);
 
-  auto mytransform = [&]() {
-    float pi = 3.14;
-    std::experimental::parallel::transform(
-        snp, std::begin(v1), std::end(v1), std::begin(v2), std::begin(res),
-        [=](float a, float b) { return pi * a + b; });
+  cl::sycl::queue q(cds);
+  sycl::sycl_execution_policy<class TransformReduceAlgorithm1> snp(q);
+
+  auto transformReduce = [&]() {
+    float pi = PI;
+    float res = std::experimental::parallel::transform_reduce(
+        snp, std::begin(v), std::end(v), [=](elem x) { return x.a * x.b * pi; },
+        0,                                         // map multiplication
+        [=](float a, float b) { return a + b; });  // reduce addition
   };
 
-  auto time = benchmark<>::duration(numReps, mytransform);
+  auto time = benchmark<>::duration(numReps, transformReduce);
 
   return time;
 }
 
-BENCHMARK_MAIN("BENCH_SYCL_TRANSFORM", benchmark_transform, 2u, 33554432u, 10);
+BENCHMARK_MAIN("BENCH_SYCL_TRANSFORM_REDUCE", benchmark_transform_reduce, 2u,
+               33554432u, 10);
